@@ -35,61 +35,65 @@
   <a id="downloadLink" style="display:none">Download File</a>
   <p id="status"></p>
 
-  <!-- Firebase Scripts -->
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-database-compat.js"></script>
 
   <script>
-    // Initialize Firebase
+    // Firebase configuration
     const firebaseConfig = {
-      apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
-      authDomain: "hello-4105a.firebaseapp.com",
-      databaseURL: "https://hello-4105a-default-rtdb.firebaseio.com",
-      projectId: "hello-4105a",
-      storageBucket: "hello-4105a.appspot.com",
-      messagingSenderId: "978669199403",
-      appId: "1:978669199403:web:6c20e3dbaf815bba890a6e",
-      measurementId: "G-2TGPP3E88X",
+      apiKey: 'YOUR_API_KEY',
+      authDomain: 'YOUR_AUTH_DOMAIN',
+      databaseURL: 'YOUR_DATABASE_URL',
+      projectId: 'YOUR_PROJECT_ID',
+      storageBucket: 'YOUR_STORAGE_BUCKET',
+      messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
+      appId: 'YOUR_APP_ID'
     };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // WebRTC setup
     const peerConnection = new RTCPeerConnection();
+    let dataChannel;
+    let receiveChannel;
     const fileInput = document.getElementById('fileInput');
     const downloadLink = document.getElementById('downloadLink');
-    const shareButton = document.getElementById('shareButton');
     const status = document.getElementById('status');
-
-    let dataChannel;
+    const shareButton = document.getElementById('shareButton');
     const sessionId = Math.random().toString(36).substring(2);
 
-    // Function to create and share a WebRTC offer
     async function createOffer() {
+      status.textContent = "Creating offer...";
       dataChannel = peerConnection.createDataChannel('file');
 
+      // File sending logic
       dataChannel.onopen = () => {
+        status.textContent = "Connection open, sending file...";
         const file = fileInput.files[0];
         if (file) {
           const reader = new FileReader();
           reader.readAsArrayBuffer(file);
           reader.onload = () => {
             dataChannel.send(reader.result);
-            status.textContent = 'File sent successfully!';
+            status.textContent = 'File sent!';
           };
+        } else {
+          status.textContent = 'No file selected!';
         }
       };
+
+      dataChannel.onclose = () => status.textContent = 'Connection closed!';
 
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
-      // Store the offer in Firebase
+      // Save the offer in Firebase
       await db.ref(`sessions/${sessionId}`).set({ offer: JSON.stringify(offer) });
       status.textContent = `Share this link: ${window.location.href}?sessionId=${sessionId}`;
     }
 
-    // Function to join an existing session and receive a file
     async function joinSession(sessionId) {
+      status.textContent = "Joining session...";
       const sessionRef = db.ref(`sessions/${sessionId}`);
       const sessionData = await sessionRef.get();
 
@@ -104,9 +108,10 @@
         await sessionRef.child('answer').set(JSON.stringify(answer));
 
         peerConnection.ondatachannel = (event) => {
-          const receiveChannel = event.channel;
+          receiveChannel = event.channel;
+          status.textContent = 'Connection established, waiting for file...';
+
           const receivedChunks = [];
-          
           receiveChannel.onmessage = (event) => {
             receivedChunks.push(event.data);
             const blob = new Blob(receivedChunks);
@@ -115,22 +120,42 @@
             downloadLink.style.display = 'block';
             status.textContent = 'File received!';
           };
+
+          receiveChannel.onclose = () => status.textContent = 'Connection closed!';
         };
       } else {
-        status.textContent = 'Invalid session link!';
+        status.textContent = 'Session not found!';
       }
     }
 
-    // Event listener for document load
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        db.ref(`sessions/${sessionId}/candidates`).push(JSON.stringify(event.candidate));
+      }
+    };
+
+    async function handleNewICECandidate(sessionId) {
+      const candidatesRef = db.ref(`sessions/${sessionId}/candidates`);
+      candidatesRef.on('child_added', async (snapshot) => {
+        const candidate = JSON.parse(snapshot.val());
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      });
+    }
+
+    // Check if joining an existing session
     document.addEventListener('DOMContentLoaded', async () => {
       const urlParams = new URLSearchParams(window.location.search);
       const sessionId = urlParams.get('sessionId');
 
       if (sessionId) {
         await joinSession(sessionId);
+        await handleNewICECandidate(sessionId);
+      } else {
+        shareButton.addEventListener('click', async () => {
+          await createOffer();
+          await handleNewICECandidate(sessionId);
+        });
       }
-
-      shareButton.addEventListener('click', createOffer);
     });
   </script>
 </body>
