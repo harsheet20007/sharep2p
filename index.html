@@ -6,11 +6,11 @@
   <title>Peer-to-Peer File Sharing</title>
   <style>
     body {
+      font-family: Arial, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      font-family: Arial, sans-serif;
       margin-top: 50px;
     }
     input, button {
@@ -18,6 +18,7 @@
       padding: 10px;
     }
     a {
+      display: none;
       margin-top: 20px;
       text-decoration: none;
       color: blue;
@@ -32,7 +33,7 @@
   <h1>Peer-to-Peer File Sharing</h1>
   <input type="file" id="fileInput" />
   <button id="shareButton">Share File</button>
-  <a id="downloadLink" style="display:none">Download File</a>
+  <a id="downloadLink">Download File</a>
   <p id="status">Status: Waiting...</p>
 
   <!-- Firebase SDK -->
@@ -40,7 +41,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-database-compat.js"></script>
 
   <script>
-    // Initialize Firebase
+    // Firebase configuration
     const firebaseConfig = {
      apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
       authDomain: "hello-4105a.firebaseapp.com",
@@ -54,6 +55,7 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
+    // WebRTC setup
     const peerConnection = new RTCPeerConnection();
     const status = document.getElementById('status');
     const fileInput = document.getElementById('fileInput');
@@ -66,28 +68,13 @@
 
     async function createOffer() {
       status.textContent = "Creating offer...";
-      dataChannel = peerConnection.createDataChannel('fileTransfer');
-
-      // Set up data channel for sending file
-      dataChannel.onopen = () => {
-        const file = fileInput.files[0];
-        if (file) {
-          status.textContent = "Sending file...";
-          const reader = new FileReader();
-          reader.onload = () => {
-            dataChannel.send(reader.result);
-            status.textContent = "File sent!";
-          };
-          reader.readAsArrayBuffer(file);
-        } else {
-          status.textContent = "No file selected!";
-        }
-      };
+      dataChannel = peerConnection.createDataChannel("fileTransfer");
+      setupDataChannel(dataChannel);
 
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
-      await db.ref(`sessions/${sessionId}`).set({ offer: JSON.stringify(offer) });
 
+      await db.ref(`sessions/${sessionId}`).set({ offer: JSON.stringify(offer) });
       status.textContent = `Share this link: ${window.location.href}?sessionId=${sessionId}`;
     }
 
@@ -106,21 +93,40 @@
 
         peerConnection.ondatachannel = (event) => {
           receiveChannel = event.channel;
-          status.textContent = "Connected! Receiving file...";
-
-          const receivedChunks = [];
-          receiveChannel.onmessage = (event) => {
-            receivedChunks.push(event.data);
-            const blob = new Blob(receivedChunks);
-            downloadLink.href = URL.createObjectURL(blob);
-            downloadLink.download = 'received_file';
-            downloadLink.style.display = 'block';
-            status.textContent = "File received!";
-          };
+          setupDataChannel(receiveChannel);
         };
       } else {
-        status.textContent = "Invalid session!";
+        status.textContent = "Session not found!";
       }
+    }
+
+    function setupDataChannel(channel) {
+      channel.onopen = () => {
+        status.textContent = "Connection established!";
+        if (channel === dataChannel) {
+          const file = fileInput.files[0];
+          if (file) {
+            status.textContent = "Sending file...";
+            const reader = new FileReader();
+            reader.onload = () => {
+              channel.send(reader.result);
+              status.textContent = "File sent!";
+            };
+            reader.readAsArrayBuffer(file);
+          }
+        }
+      };
+
+      channel.onmessage = (event) => {
+        status.textContent = "Receiving file...";
+        const blob = new Blob([event.data]);
+        downloadLink.href = URL.createObjectURL(blob);
+        downloadLink.download = 'received_file';
+        downloadLink.style.display = 'block';
+        status.textContent = "File received!";
+      };
+
+      channel.onclose = () => status.textContent = "Connection closed!";
     }
 
     peerConnection.onicecandidate = (event) => {
