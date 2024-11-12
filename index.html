@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Peer-to-Peer File Sharing</title>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: Arial, sans-serif;
+      margin-top: 50px;
+    }
+    input, button {
+      margin: 10px;
+      padding: 10px;
+    }
+    a {
+      margin-top: 20px;
+      text-decoration: none;
+      color: blue;
+    }
+    #status {
+      margin-top: 20px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Peer-to-Peer File Sharing (No Account Required)</h1>
+  <input type="file" id="fileInput" />
+  <button id="shareButton">Share File</button>
+  <a id="downloadLink" style="display:none">Download File</a>
+  <p id="status"></p>
+
+  <!-- Firebase Scripts -->
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-database-compat.js"></script>
+
+  <script>
+    // Firebase configuration
+    const firebaseConfig = {
+        apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
+      authDomain: "hello-4105a.firebaseapp.com",
+      databaseURL: "https://hello-4105a-default-rtdb.firebaseio.com",
+      projectId: "hello-4105a",
+      storageBucket: "hello-4105a.appspot.com",
+      messagingSenderId: "978669199403",
+      appId: "1:978669199403:web:6c20e3dbaf815bba890a6e",
+      measurementId: "G-2TGPP3E88X",
+    };
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const peerConnection = new RTCPeerConnection();
+    const fileInput = document.getElementById('fileInput');
+    const downloadLink = document.getElementById('downloadLink');
+    const shareButton = document.getElementById('shareButton');
+    const status = document.getElementById('status');
+
+    let dataChannel;
+    const sessionId = Math.random().toString(36).substring(2);
+
+    // Function to create and share a WebRTC offer
+    async function createOffer() {
+      dataChannel = peerConnection.createDataChannel('file');
+
+      // Handle sending the file
+      dataChannel.onopen = () => {
+        const file = fileInput.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.readAsArrayBuffer(file);
+          reader.onload = () => {
+            dataChannel.send(reader.result);
+            status.textContent = 'File sent successfully!';
+          };
+        }
+      };
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      // Store the offer in Firebase for others to connect
+      await db.ref(`sessions/${sessionId}`).set({ offer: JSON.stringify(offer) });
+
+      status.textContent = `Share this link: ${window.location.href}?sessionId=${sessionId}`;
+    }
+
+    // Function to join an existing WebRTC session
+    async function joinSession(sessionId) {
+      const sessionRef = db.ref(`sessions/${sessionId}`);
+      const sessionData = await sessionRef.get();
+
+      if (sessionData.exists()) {
+        const offer = JSON.parse(sessionData.val().offer);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+
+        await sessionRef.child('answer').set(JSON.stringify(answer));
+
+        peerConnection.ondatachannel = (event) => {
+          const receiveChannel = event.channel;
+          const receivedChunks = [];
+          
+          receiveChannel.onmessage = (event) => {
+            receivedChunks.push(event.data);
+            const blob = new Blob(receivedChunks);
+            downloadLink.href = URL.createObjectURL(blob);
+            downloadLink.download = 'downloaded_file';
+            downloadLink.style.display = 'block';
+            status.textContent = 'File received!';
+          };
+        };
+      } else {
+        status.textContent = 'Invalid session link!';
+      }
+    }
+
+    // Check if we're joining an existing session
+    document.addEventListener('DOMContentLoaded', async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sessionId = urlParams.get('sessionId');
+
+      if (sessionId) {
+        await joinSession(sessionId);
+      }
+
+      shareButton.addEventListener('click', createOffer);
+    });
+  </script>
+</body>
+</html>
