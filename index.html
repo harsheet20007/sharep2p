@@ -1,162 +1,128 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Peer-to-Peer File Sharing</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      margin-top: 50px;
-    }
-    input, button {
-      margin: 10px;
-      padding: 10px;
-    }
-    a {
-      display: none;
-      margin-top: 20px;
-      text-decoration: none;
-      color: blue;
-    }
-    #status {
-      margin-top: 20px;
-      font-weight: bold;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Peer-to-Peer File Sharing</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+        input, button { margin: 10px; padding: 10px; }
+        #status { margin-top: 20px; font-weight: bold; }
+        progress { margin-top: 20px; width: 300px; height: 20px; }
+        a { display: none; margin-top: 20px; }
+    </style>
 </head>
 <body>
-  <h1>Peer-to-Peer File Sharing</h1>
-  <input type="file" id="fileInput" />
-  <button id="shareButton">Share File</button>
-  <a id="downloadLink">Download File</a>
-  <p id="status">Status: Waiting...</p>
+    <h1>Peer-to-Peer File Sharing</h1>
+    <input type="file" id="fileInput" />
+    <button id="shareButton">Share File</button>
+    <p id="status">Status: Waiting...</p>
+    <progress id="progress" max="100" value="0"></progress>
+    <a id="downloadLink" href="#" download>Download File</a>
 
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-database-compat.js"></script>
+    <script>
+        const ws = new WebSocket(`wss://959aad30-edbc-4ae8-ab26-19edc5de5a0a-00-12c3meiytgvx0.pike.replit.dev:8000/`);
+        let peerConnection;
+        let dataChannel;
+        let fileInput = document.getElementById('fileInput');
+        let status = document.getElementById('status');
+        let progress = document.getElementById('progress');
+        let downloadLink = document.getElementById('downloadLink');
 
-  <script>
-    // Firebase configuration
-    const firebaseConfig = {
-     apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
-      authDomain: "hello-4105a.firebaseapp.com",
-      databaseURL: "https://hello-4105a-default-rtdb.firebaseio.com",
-      projectId: "hello-4105a",
-      storageBucket: "hello-4105a.appspot.com",
-      messagingSenderId: "978669199403",
-      appId: "1:978669199403:web:6c20e3dbaf815bba890a6e",
-      measurementId: "G-2TGPP3E88X",
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
-
-    // WebRTC setup
-    const peerConnection = new RTCPeerConnection();
-    const status = document.getElementById('status');
-    const fileInput = document.getElementById('fileInput');
-    const downloadLink = document.getElementById('downloadLink');
-    const shareButton = document.getElementById('shareButton');
-
-    let dataChannel;
-    let receiveChannel;
-    const sessionId = Math.random().toString(36).substring(2);
-
-    async function createOffer() {
-      status.textContent = "Creating offer...";
-      dataChannel = peerConnection.createDataChannel("fileTransfer");
-      setupDataChannel(dataChannel);
-
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-
-      await db.ref(`sessions/${sessionId}`).set({ offer: JSON.stringify(offer) });
-      status.textContent = `Share this link: ${window.location.href}?sessionId=${sessionId}`;
-    }
-
-    async function joinSession(sessionId) {
-      status.textContent = "Joining session...";
-      const sessionRef = db.ref(`sessions/${sessionId}`);
-      const sessionData = await sessionRef.get();
-
-      if (sessionData.exists()) {
-        const offer = JSON.parse(sessionData.val().offer);
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        await sessionRef.child('answer').set(JSON.stringify(answer));
-
-        peerConnection.ondatachannel = (event) => {
-          receiveChannel = event.channel;
-          setupDataChannel(receiveChannel);
+        ws.onopen = () => {
+            status.textContent = "Connected to WebSocket server!";
         };
-      } else {
-        status.textContent = "Session not found!";
-      }
-    }
 
-    function setupDataChannel(channel) {
-      channel.onopen = () => {
-        status.textContent = "Connection established!";
-        if (channel === dataChannel) {
-          const file = fileInput.files[0];
-          if (file) {
-            status.textContent = "Sending file...";
-            const reader = new FileReader();
-            reader.onload = () => {
-              channel.send(reader.result);
-              status.textContent = "File sent!";
+        ws.onmessage = async (event) => {
+            const message = JSON.parse(event.data);
+
+            if (message.offer) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                ws.send(JSON.stringify({ answer }));
+            } else if (message.answer) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+            } else if (message.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+            }
+        };
+
+        // Create WebRTC PeerConnection and DataChannel for file sharing
+        async function createPeerConnection() {
+            peerConnection = new RTCPeerConnection();
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({ candidate: event.candidate }));
+                }
             };
-            reader.readAsArrayBuffer(file);
-          }
+
+            // Receiving data via DataChannel
+            peerConnection.ondatachannel = (event) => {
+                let receiveChannel = event.channel;
+                receiveChannel.binaryType = 'arraybuffer';
+                let receivedBuffers = [];
+                
+                receiveChannel.onmessage = (event) => {
+                    receivedBuffers.push(event.data);
+                    progress.value = (receivedBuffers.length / totalChunks) * 100;
+                };
+
+                receiveChannel.onopen = () => {
+                    status.textContent = "Receiving file...";
+                };
+
+                receiveChannel.onclose = () => {
+                    const blob = new Blob(receivedBuffers);
+                    downloadLink.href = URL.createObjectURL(blob);
+                    downloadLink.style.display = 'block';
+                    status.textContent = "File received successfully!";
+                };
+            };
         }
-      };
 
-      channel.onmessage = (event) => {
-        status.textContent = "Receiving file...";
-        const blob = new Blob([event.data]);
-        downloadLink.href = URL.createObjectURL(blob);
-        downloadLink.download = 'received_file';
-        downloadLink.style.display = 'block';
-        status.textContent = "File received!";
-      };
+        // Share file
+        document.getElementById('shareButton').onclick = async () => {
+            if (!fileInput.files[0]) {
+                status.textContent = "Please select a file first!";
+                return;
+            }
 
-      channel.onclose = () => status.textContent = "Connection closed!";
-    }
+            await createPeerConnection();
+            dataChannel = peerConnection.createDataChannel("fileChannel");
+            dataChannel.binaryType = 'arraybuffer';
+            
+            // Send file
+            const file = fileInput.files[0];
+            const chunkSize = 16384;
+            const fileReader = new FileReader();
+            let offset = 0;
 
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        db.ref(`sessions/${sessionId}/candidates`).push(JSON.stringify(event.candidate));
-      }
-    };
+            fileReader.onload = async (event) => {
+                dataChannel.send(event.target.result);
+                offset += event.target.result.byteLength;
+                progress.value = offset;
 
-    async function handleICECandidates(sessionId) {
-      const candidatesRef = db.ref(`sessions/${sessionId}/candidates`);
-      candidatesRef.on('child_added', async (snapshot) => {
-        const candidate = JSON.parse(snapshot.val());
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-      });
-    }
+                if (offset < file.size) {
+                    readSlice(offset);
+                } else {
+                    status.textContent = "File sent!";
+                }
+            };
 
-    document.addEventListener('DOMContentLoaded', async () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const sessionId = urlParams.get('sessionId');
+            const readSlice = (o) => {
+                const slice = file.slice(o, o + chunkSize);
+                fileReader.readAsArrayBuffer(slice);
+            };
 
-      if (sessionId) {
-        await joinSession(sessionId);
-        await handleICECandidates(sessionId);
-      } else {
-        shareButton.addEventListener('click', async () => {
-          await createOffer();
-          await handleICECandidates(sessionId);
-        });
-      }
-    });
-  </script>
+            readSlice(0);
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            ws.send(JSON.stringify({ offer }));
+        };
+
+    </script>
 </body>
 </html>
