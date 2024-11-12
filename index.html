@@ -29,20 +29,20 @@
   </style>
 </head>
 <body>
-  <h1>Peer-to-Peer File Sharing (No Account Required)</h1>
+  <h1>Peer-to-Peer File Sharing</h1>
   <input type="file" id="fileInput" />
   <button id="shareButton">Share File</button>
   <a id="downloadLink" style="display:none">Download File</a>
-  <p id="status"></p>
+  <p id="status">Status: Waiting...</p>
 
   <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-database-compat.js"></script>
 
   <script>
-    // Firebase configuration
+    // Initialize Firebase
     const firebaseConfig = {
-       apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
+     apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
       authDomain: "hello-4105a.firebaseapp.com",
       databaseURL: "https://hello-4105a-default-rtdb.firebaseio.com",
       projectId: "hello-4105a",
@@ -55,41 +55,39 @@
     const db = firebase.database();
 
     const peerConnection = new RTCPeerConnection();
-    let dataChannel;
-    let receiveChannel;
+    const status = document.getElementById('status');
     const fileInput = document.getElementById('fileInput');
     const downloadLink = document.getElementById('downloadLink');
-    const status = document.getElementById('status');
     const shareButton = document.getElementById('shareButton');
+
+    let dataChannel;
+    let receiveChannel;
     const sessionId = Math.random().toString(36).substring(2);
 
     async function createOffer() {
       status.textContent = "Creating offer...";
-      dataChannel = peerConnection.createDataChannel('file');
+      dataChannel = peerConnection.createDataChannel('fileTransfer');
 
-      // File sending logic
+      // Set up data channel for sending file
       dataChannel.onopen = () => {
-        status.textContent = "Connection open, sending file...";
         const file = fileInput.files[0];
         if (file) {
+          status.textContent = "Sending file...";
           const reader = new FileReader();
-          reader.readAsArrayBuffer(file);
           reader.onload = () => {
             dataChannel.send(reader.result);
-            status.textContent = 'File sent!';
+            status.textContent = "File sent!";
           };
+          reader.readAsArrayBuffer(file);
         } else {
-          status.textContent = 'No file selected!';
+          status.textContent = "No file selected!";
         }
       };
 
-      dataChannel.onclose = () => status.textContent = 'Connection closed!';
-
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
-
-      // Save the offer in Firebase
       await db.ref(`sessions/${sessionId}`).set({ offer: JSON.stringify(offer) });
+
       status.textContent = `Share this link: ${window.location.href}?sessionId=${sessionId}`;
     }
 
@@ -104,13 +102,11 @@
 
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
-
-        // Store the answer in Firebase
         await sessionRef.child('answer').set(JSON.stringify(answer));
 
         peerConnection.ondatachannel = (event) => {
           receiveChannel = event.channel;
-          status.textContent = 'Connection established, waiting for file...';
+          status.textContent = "Connected! Receiving file...";
 
           const receivedChunks = [];
           receiveChannel.onmessage = (event) => {
@@ -119,13 +115,11 @@
             downloadLink.href = URL.createObjectURL(blob);
             downloadLink.download = 'received_file';
             downloadLink.style.display = 'block';
-            status.textContent = 'File received!';
+            status.textContent = "File received!";
           };
-
-          receiveChannel.onclose = () => status.textContent = 'Connection closed!';
         };
       } else {
-        status.textContent = 'Session not found!';
+        status.textContent = "Invalid session!";
       }
     }
 
@@ -135,7 +129,7 @@
       }
     };
 
-    async function handleNewICECandidate(sessionId) {
+    async function handleICECandidates(sessionId) {
       const candidatesRef = db.ref(`sessions/${sessionId}/candidates`);
       candidatesRef.on('child_added', async (snapshot) => {
         const candidate = JSON.parse(snapshot.val());
@@ -143,18 +137,17 @@
       });
     }
 
-    // Check if joining an existing session
     document.addEventListener('DOMContentLoaded', async () => {
       const urlParams = new URLSearchParams(window.location.search);
       const sessionId = urlParams.get('sessionId');
 
       if (sessionId) {
         await joinSession(sessionId);
-        await handleNewICECandidate(sessionId);
+        await handleICECandidates(sessionId);
       } else {
         shareButton.addEventListener('click', async () => {
           await createOffer();
-          await handleNewICECandidate(sessionId);
+          await handleICECandidates(sessionId);
         });
       }
     });
